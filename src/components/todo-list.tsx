@@ -1,39 +1,74 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
 import { Trash2, Edit2, Check, X } from "lucide-react"
 
 interface Todo {
-  id: number
+  id: string
   text: string
   completed: boolean
 }
 
 export default function TodoList() {
   const [todos, setTodos] = useState<Todo[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [inputValue, setInputValue] = useState("")
-  const [editingId, setEditingId] = useState<number | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
   const [editingText, setEditingText] = useState("")
 
-  const addTodo = () => {
-    if (inputValue.trim()) {
-      setTodos([
-        ...todos,
-        {
-          id: Date.now(),
-          text: inputValue,
-          completed: false,
-        },
-      ])
+  // Cargar lista inicial
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true)
+      setError(null)
+      try {
+        const res = await fetch("/api/todos", { cache: "no-store" })
+        if (!res.ok) throw new Error("No se pudo cargar la lista")
+        const data = await res.json()
+        setTodos((data?.todos ?? []) as Todo[])
+      } catch (e: any) {
+        setError(e?.message ?? "Error inesperado")
+      } finally {
+        setLoading(false)
+      }
+    }
+    load()
+  }, [])
+
+  const addTodo = async () => {
+    const text = inputValue.trim()
+    if (!text) return
+    setError(null)
+    try {
+      const res = await fetch("/api/todos", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      })
+      if (!res.ok) throw new Error("No se pudo crear la tarea")
+      const { id } = await res.json()
+      // Optimista: añadimos al estado
+      setTodos([{ id, text, completed: false }, ...todos])
       setInputValue("")
+    } catch (e: any) {
+      setError(e?.message ?? "Error al crear")
     }
   }
 
-  const deleteTodo = (id: number) => {
+  const deleteTodo = async (id: string) => {
+    const prev = todos
     setTodos(todos.filter((todo) => todo.id !== id))
+    try {
+      const res = await fetch(`/api/todos/${id}`, { method: "DELETE" })
+      if (!res.ok) throw new Error("No se pudo eliminar")
+    } catch (e) {
+      setTodos(prev)
+      setError("Error al eliminar")
+    }
   }
 
   const startEditing = (todo: Todo) => {
@@ -41,11 +76,23 @@ export default function TodoList() {
     setEditingText(todo.text)
   }
 
-  const saveEdit = (id: number) => {
-    if (editingText.trim()) {
-      setTodos(todos.map((todo) => (todo.id === id ? { ...todo, text: editingText } : todo)))
+  const saveEdit = async (id: string) => {
+    const text = editingText.trim()
+    if (!text) return
+    const prev = todos
+    setTodos(todos.map((todo) => (todo.id === id ? { ...todo, text } : todo)))
+    try {
+      const res = await fetch(`/api/todos/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      })
+      if (!res.ok) throw new Error("No se pudo actualizar")
       setEditingId(null)
       setEditingText("")
+    } catch (e) {
+      setTodos(prev)
+      setError("Error al actualizar")
     }
   }
 
@@ -54,8 +101,23 @@ export default function TodoList() {
     setEditingText("")
   }
 
-  const toggleComplete = (id: number) => {
-    setTodos(todos.map((todo) => (todo.id === id ? { ...todo, completed: !todo.completed } : todo)))
+  const toggleComplete = async (id: string) => {
+    const target = todos.find((t) => t.id === id)
+    if (!target) return
+    const prev = todos
+    const nextCompleted = !target.completed
+    setTodos(todos.map((todo) => (todo.id === id ? { ...todo, completed: nextCompleted } : todo)))
+    try {
+      const res = await fetch(`/api/todos/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ completed: nextCompleted }),
+      })
+      if (!res.ok) throw new Error("No se pudo cambiar el estado")
+    } catch (e) {
+      setTodos(prev)
+      setError("Error al cambiar estado")
+    }
   }
 
   return (
@@ -83,14 +145,23 @@ export default function TodoList() {
                   onKeyDown={(e) => e.key === "Enter" && addTodo()}
                   className="flex-1"
                 />
-                <Button onClick={addTodo}>Add Task</Button>
+                <Button onClick={addTodo} disabled={!inputValue.trim()}>Add Task</Button>
               </div>
+              {error && (
+                <p className="text-sm text-destructive mt-2">{error}</p>
+              )}
             </CardContent>
           </Card>
 
           {/* Todo List */}
           <div className="space-y-3">
-            {todos.length === 0 ? (
+            {loading ? (
+              <Card>
+                <CardContent className="py-12">
+                  <p className="text-center text-muted-foreground">Cargando…</p>
+                </CardContent>
+              </Card>
+            ) : todos.length === 0 ? (
               <Card>
                 <CardContent className="py-12">
                   <p className="text-center text-muted-foreground">No tasks yet. Add one to get started!</p>
